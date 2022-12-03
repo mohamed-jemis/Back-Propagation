@@ -66,7 +66,7 @@ def preprocess(bb):
     X_train = train_data[:, :-3]
     Y_train = train_data[:, -3:]
 
-    X_test = test_data[:, :-1]
+    X_test = test_data[:, :-3]
     Y_test = test_data[:, -3:]
     return X_train, Y_train, X_test, Y_test
 
@@ -103,12 +103,15 @@ def forward_step(weights, X, activation, bb):
     if activation == 1:
         return sigmoid(Z), Z
     else:
+        Z = Z.astype(float)
         return np.tanh(Z), Z
 
 
 def forward_propagation(weights, x, activation, layers, bb):
     A, Z = forward_step(weights[0], x, activation, bb)
     A_s, Z_s = [], []
+    A_s.clear()
+    Z_s.clear()
 
     A_s.append(A)
     Z_s.append(Z)
@@ -135,31 +138,38 @@ def activ_derv(X, activation):
         return 1 - np.tanh(X)**2
 
 
-def back_propagation(weights, t, y, Z_s, activation, layers):
-    error_out = (t.reshape(-1, 1) - y) * activ_derv(Z_s[layers], activation)
-    error_h = []
+def back_propagation(weights, t, y, Z_s, activation, layers, bb):
+    sigmas = [(t.reshape(-1, 1) - y) * activ_derv(Z_s[-1], activation)]
 
-    for i in range(layers):
-        print(weights[i].shape)
-        for j in range(len(y)):
-            error = activ_derv(Z_s[i], activation) * np.dot(weights[i], error_out)
-        error_h.append(error)
+    for i in reversed(range(layers)):
+        if bb == 0:
+            sigma_h = activ_derv(Z_s[i], activation) * (weights[i+1].dot(sigmas[-1]))
+        else:
+            sigma_h = activ_derv(Z_s[i], activation) * (weights[i+1][:-1].dot(sigmas[-1]))
 
-    error_h = np.array(error_h)
+        sigmas.append(sigma_h)
 
-    return error_out, error_h
+    return sigmas[::-1]
 
 
-def update_weights(weights, error_out, error_h, lr, x, layers, bb):
-    dwh = lr * error_h * x
-    dwy = lr * error_out
+def update_weights(weights, sigmas, lr, x, A_s, bb):
+    if bb == 0:
+        delta = lr * x.reshape(-1, 1).dot(sigmas[0].T)
+        weights[0] -= np.float64(delta)
 
-    weights[layers] -= dwy
-    weights[:layers] -= dwh
+        for i in range(1, len(weights)):
+            delta = lr * A_s[i-1].dot(sigmas[i].T)
+            weights[i] -= np.float64(delta)
+    else:
+        delta = lr * x.reshape(-1, 1).dot(sigmas[0].T)
+        weights[0][:-1] -= np.float64(delta)
 
-    if bb == 1:
-        dbh = lr * error_h
-        weights[-1] -= dbh
+        weights[0][-1] -= lr * np.float64(sigmas[0]).reshape(-1, )
+
+        for i in range(1, len(weights)):
+            delta = lr * A_s[i-1].dot(sigmas[i].T)
+            weights[i][:-1] -= np.float64(delta)
+            weights[i][-1] -= lr * np.float64(sigmas[i]).reshape(-1, )
 
     return weights
 
@@ -169,30 +179,31 @@ def train_weight(weights, X, t, activation, layers, epochs, lr, bb):
     for i in range(epochs):
         for k in range(X.shape[0]):
             y, A_s, Z_s = forward_propagation(weights, X[k], activation, layers, bb)
-            error_out, error_h = back_propagation(weights, t[k], y, Z_s, activation, layers)
-            weights = update_weights(weights, error_out, error_h, lr, X[k], layers, bb)
+            sigmas = back_propagation(weights, t[k], y, Z_s, activation, layers, bb)
+            weights = update_weights(weights, sigmas, lr, X[k], A_s, bb)
 
     return weights
 
 
-def test(weights, bias, X_test, Y_test, activation, layers, classes, bb):
-    for j in range(X_test.shape[0]):
-        y, A_s, Z_s = forward_propagation(weights, bias, X_test[j], activation, layers, bb)
-        confusion_matrix = np.zeros((classes, classes))
-        correct = 0
+def test(weights, X_test, Y_test, activation, layers, classes, bb):
+    confusion_matrix = np.zeros((classes, classes))
+    correct = 0
+    for i in range(Y_test.shape[0]):
+        y, A_s, Z_s = forward_propagation(weights, X_test[i], activation, layers, bb)
+        
+        max_indx = np.argmax(y)
+        class_id = np.argmax(Y_test[i]) - 1
 
-        for i in range(Y_test.shape[0]):
-            max_indx = np.argmax(y)
+        if max_indx == class_id:
+            confusion_matrix[max_indx, max_indx] += 1
+        else:
+            confusion_matrix[max_indx, class_id] += 1
 
-            if max_indx + 1 == Y_test[i]:
-                confusion_matrix[max_indx, max_indx] += 1
-            else:
-                confusion_matrix[max_indx, Y_test[i] - 1] += 1
+    for i in range(classes):
+        correct += confusion_matrix[i, i]
 
-        for i in range(classes):
-            correct += confusion_matrix[i, i]
+    accuracy = correct * 100 / Y_test.shape[0]
 
-        accuracy = correct * 100 / Y_test.shape[0]
 
     return accuracy, confusion_matrix
 
@@ -277,6 +288,7 @@ def submit_clk():
     activation = ac_fn_indx.get()
 
     accuracy, confusion_matrix = neural_network(no_of_neurons, no_of_layers, 3, activation, m, eta, bb)
+    print(confusion_matrix)
     messagebox.showinfo("Result", "The accuracy is " + str(accuracy))
 
 
